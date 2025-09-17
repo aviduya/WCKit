@@ -1,5 +1,5 @@
 //
-//  File.swift
+//  WCKTransferable.swift
 //  WCKit
 //
 //  Created by Anfernee Viduya on 9/16/25.
