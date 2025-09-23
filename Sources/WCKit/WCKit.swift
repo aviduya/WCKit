@@ -11,279 +11,58 @@ import SwiftData
 import OSLog
 
 @Observable
-public class WCKit<T: Codable & PersistentModel>: NSObject, @preconcurrency WCSessionDelegate {
-    let model: T.Type?
-    let container: ModelContainer?
+public class WCKit<T: Codable & PersistentModel>: NSObject {
+    let modelType: T.Type
+    let context: ModelContext?
     private let logger: Logger
+    private let wckService: WCKService
     
-    public init(model: T.Type? = nil, container: ModelContainer? = nil) {
-        self.model = model.self
-        self.container = container
-        logger = Logger(subsystem: "WCKit", category: "watch-session")
+    public init(modelType: T.Type, context: ModelContext? = nil) {
+        self.modelType = modelType
+        self.context = context
+        self.logger = Logger(subsystem: "WCKit", category: "watch-session")
+        self.wckService = WCKService()
         super.init()
-        start()
-        
-    }
-    
-    /// Check if session is active and reachable
-    public var isReachable: Bool {
-        return WCSession.default.isReachable
-    }
-    
-    /// Check session activation state
-    public var activationState: WCSessionActivationState {
-        return WCSession.default.activationState
-    }
-    
-    private func start() {
-        guard WCSession.isSupported() else {
-            logger.error("WatchConnectivity is not supported")
-            return
+
+        wckService.onIncomingData = { [weak self] data in
+            guard let self = self else { return }
+            #if os(iOS)
+            self.saveData(data)
+            #endif
         }
-        
-        let session = WCSession.default
-        session.delegate = self
-        session.activate()
-        logger.info("WCKit session activation requested")
     }
     
-    public func send(_ object: T) {
-        
+    public func sendData(_ object: T) {
         do {
             let data = try JSONEncoder().encode(object)
-            let message = [
-                "type": "message",
-                "data": data,
-            ] as [String: Any]
-            
-            guard WCSession.default.isReachable else {
-                logger.warning("Watch is not reachable")
+            guard wckService.isReachable else {
+                logger.warning("Counterpart not reachable — consider transferUserInfo/updateApplicationContext")
                 return
             }
-            
-            WCSession.default.sendMessageData(data, replyHandler: nil) { error in
-                self.logger.error("Failed to send message: \(error.localizedDescription)")
-            }
-            
-        } catch {
-            logger.error("Failed to encode object: \(error)")
-        }
-    }
-    
-    @MainActor
-    private func saveData(_ data: Data) {
-        guard let model else {
-            return
-        }
-        Task {
-            do {
-                let object = try JSONDecoder().decode(model, from: data)
-                guard let context = container?.mainContext.insert(object) else {
-                    return
+            WCSession.default.sendMessageData(
+                data,
+                replyHandler: { _ in
+                    self.logger.info("ACK received")
+                },
+                errorHandler: { err in
+                    self.logger.error("sendMessageData error: \(err.localizedDescription)")
                 }
-                try container?.mainContext.save()
-                
-            } catch {
-                
-            }
+            )
+        } catch {
+            logger.error("Failed to encode object: \(error.localizedDescription)")
         }
     }
     
     
-    
-    @MainActor public func session(_ session: WCSession, didReceiveMessageData messageData: Data) {
-        logger.debug("Received message data")
-        saveData(messageData)
-    }
-
-    
-    public func session( _ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: (any Error)?) {
-        switch activationState {
-        case .activated:
-            logger.info("WCSession activated successfully")
-        case .inactive:
-            logger.info("WCSession inactive")
-        case .notActivated:
-            logger.warning("WCSession not activated")
-        @unknown default:
-            logger.error("WCSession unknown activation state")
-        }
-        
-        if let error = error {
-            logger.error("WCSession activation error: \(error.localizedDescription)")
+    private func saveData(_ data: Data) {
+        do {
+            let decodedObject = try JSONDecoder().decode(modelType, from: data)
+            guard let context else { return }
+            context.insert(decodedObject)
+            try context.save()
+            logger.info("Saved \(String(describing: self.modelType)) to SwiftData")
+        } catch {
+            logger.error("Decode/save failed: \(error.localizedDescription)")
         }
     }
-    
-#if os(iOS)
-    public func sessionDidBecomeInactive(_ session: WCSession) {
-        logger.info("WCSession became inactive")
-    }
-    
-    public func sessionDidDeactivate(_ session: WCSession) {
-        logger.info("WCSession deactivated")
-        // Reactivate the session for iOS
-        session.activate()
-    }
-    
-    
-#endif // os(iOS)
-    
-    public func sessionReachabilityDidChange(_ session: WCSession) {
-        logger.info("WCSession reachability changed to: \(session.isReachable)")
-    }
-    
-    
 }
-//// MARK: - WCKit Main Class
-//@Observable
-//public class WCKit: NSObject {
-//    var store: WCKStore?
-//    private let logger: Logger
-//    private var typeMap: [String: any WCKTransferable.Type] = [:]
-//
-//    public init(store: WCKStore? = nil) {
-//        self.store = store
-//        logger = Logger(subsystem: "WCKit", category: "watch-session")
-//        super.init()
-//        start()
-//    }
-//
-//    // MARK: - Public Methods
-//
-//    /// Send a WCTransferable object to the paired device
-//    public func send<T: WCKTransferable>(_ object: T) {
-//        let typeKey = T.typeKey
-//        typeMap[typeKey] = T.self
-//
-//        do {
-//            let data = try JSONEncoder().encode(object)
-//            let message =
-//                [
-//                    "type": typeKey,
-//                    "data": data,
-//                ] as [String: Any]
-//
-//            guard WCSession.default.isReachable else {
-//                logger.warning("Watch is not reachable")
-//                return
-//            }
-//
-//            WCSession.default.sendMessage(message, replyHandler: nil) { error in
-//                self.logger.error("Failed to send message: \(error.localizedDescription)")
-//            }
-//
-//            logger.info("Sent message of type: \(typeKey)")
-//        } catch {
-//            logger.error("Failed to encode object: \(error)")
-//        }
-//    }
-//
-//    /// Manually register a type for receiving (optional - auto-registers when sending)
-//    public func register<T: WCKTransferable>(_ type: T.Type) {
-//        typeMap[T.typeKey] = type
-//        logger.info("Registered type: \(T.typeKey)")
-//    }
-//
-//    /// Check if session is active and reachable
-//    public var isReachable: Bool {
-//        return WCSession.default.isReachable
-//    }
-//
-//    /// Check session activation state
-//    public var activationState: WCSessionActivationState {
-//        return WCSession.default.activationState
-//    }
-//
-//    // MARK: - Private Methods
-//
-//    private func start() {
-//        guard WCSession.isSupported() else {
-//            logger.error("WatchConnectivity is not supported")
-//            return
-//        }
-//
-//        let session = WCSession.default
-//        session.delegate = self
-//        session.activate()
-//        logger.info("WCKit session activation requested")
-//    }
-//
-//    private func handleReceivedData<T: WCKTransferable>(_ data: Data, type: T.Type) throws {
-//        let decoder = JSONDecoder()
-//        let object = try decoder.decode(type, from: data)
-//        try store?.insert(object)
-//        logger.info("Successfully saved object of type: \(T.typeKey)")
-//    }
-//}
-
-// MARK: - WCSessionDelegate
-//extension WCKit: WCSessionDelegate {
-//
-//    public func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
-//        logger.info("Received message")
-//
-//        guard let typeKey = message["type"] as? String,
-//            let data = message["data"] as? Data
-//        else {
-//            logger.error("Invalid message format - missing type or data")
-//            return
-//        }
-//
-//        guard let registeredType = typeMap[typeKey] else {
-//            logger.warning(
-//                "No type registered for key: \(typeKey). Register the type first or send it once to auto-register."
-//            )
-//            return
-//        }
-//
-//        do {
-//            // Create a function that works with the existential type
-//            func decode<T: WCKTransferable>(_ type: T.Type) throws {
-//                try handleReceivedData(data, type: type)
-//            }
-//
-//            // Call with the registered type
-//            try decode(registeredType)
-//            logger.info("Successfully processed message of type: \(typeKey)")
-//
-//        } catch {
-//            logger.error("Failed to process \(typeKey): \(error.localizedDescription)")
-//        }
-//    }
-//
-//    public func session(
-//        _ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState,
-//        error: (any Error)?
-//    ) {
-//        switch activationState {
-//        case .activated:
-//            logger.info("WCSession activated successfully")
-//        case .inactive:
-//            logger.info("WCSession inactive")
-//        case .notActivated:
-//            logger.warning("WCSession not activated")
-//        @unknown default:
-//            logger.error("WCSession unknown activation state")
-//        }
-//
-//        if let error = error {
-//            logger.error("WCSession activation error: \(error.localizedDescription)")
-//        }
-//    }
-//
-//    #if os(iOS)
-//        public func sessionDidBecomeInactive(_ session: WCSession) {
-//            logger.info("WCSession became inactive")
-//        }
-//
-//        public func sessionDidDeactivate(_ session: WCSession) {
-//            logger.info("WCSession deactivated")
-//            // Reactivate the session for iOS
-//            session.activate()
-//        }
-//    #endif  // os(iOS)
-//
-//    public func sessionReachabilityDidChange(_ session: WCSession) {
-//        logger.info("WCSession reachability changed to: \(session.isReachable)")
-//    }
-//}
