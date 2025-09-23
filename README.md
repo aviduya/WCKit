@@ -1,12 +1,12 @@
 # WCKit
 
->**EXPERIMENTAL/PROTOTYPE**: This package is in early development and NOT production-ready. APIs will change without notice.
+>**EXPERIMENTAL/PROTOTYPE**: This package is in early development and NOT production-ready. APIs will change without notice. This package is meant for my own learning. 
 
 ![Status: Prototype](https://img.shields.io/badge/Status-Prototype-orange)
 ![Version: 0.x](https://img.shields.io/badge/Version-0.x-red)
 ![Swift: 6.2+](https://img.shields.io/badge/Swift-6.2+-blue)
 
-A Swift package for simplifying WatchConnectivity communication between iOS and watchOS apps.
+A Swift package for simplifying WatchConnectivity communication watchOS to iOS apps.
 
 ## Important Notice
 
